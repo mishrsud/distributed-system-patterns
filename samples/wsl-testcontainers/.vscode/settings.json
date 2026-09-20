@@ -1,0 +1,4 @@
+{
+  "dotnet.defaultSolution": "WslTestcontainers.slnx",
+  "terminal.integrated.defaultProfile.linux": "bash"
+}
