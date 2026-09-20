@@ -1,0 +1,53 @@
+# Build outputs
+**/bin/
+**/obj/
+**/artifacts/
+**/TestResults/
+**/coverage/
+*.coverage
+*.coveragexml
+*.trx
+
+# NuGet
+**/packages/
+*.nupkg
+*.snupkg
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# JetBrains
+.idea/
+*.sln.iml
+*.DotSettings.user
+
+# VS Code user-local state; committed workspace files remain allowed
+.vscode/*.log
+.vscode/.ropeproject/
+
+# Operating systems
+.DS_Store
+Thumbs.db
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Docker and LocalStack runtime state
+.localstack/
+localstack-data/
+docker-data/
+
+# Local worktrees
+.worktrees/
+worktrees/
+
