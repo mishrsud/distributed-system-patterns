@@ -1,7 +1,10 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using TransactionalOutbox.Core.Common;
 using TransactionalOutbox.Core.Orders;
+using TransactionalOutbox.Infrastructure.Outbox;
+using TransactionalOutbox.Infrastructure.Persistence.Interceptors;
 
 namespace TransactionalOutbox.IntegrationTests.Persistence;
 
@@ -107,6 +110,34 @@ public sealed class AtomicOrderOutboxTests(InfrastructureFixture fixture)
             exception.Message);
     }
 
+    [Fact]
+    public async Task UnsupportedDomainEventRemainsPendingWhenSaveChangesAsyncFails()
+    {
+        var domainEvent = new UnsupportedDomainEvent(
+            Guid.Parse("55555555-5555-5555-5555-555555555555"),
+            new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero));
+        var entity = new TestEntity(Guid.Parse("66666666-6666-6666-6666-666666666666"));
+        entity.Raise(domainEvent);
+
+        var options = new DbContextOptionsBuilder<TestDbContext>()
+            .UseSqlServer(fixture.ConnectionString)
+            .Options;
+
+        await using var context = new TestDbContext(options);
+        context.Entities.Add(entity);
+
+        await Assert.ThrowsAsync<NotSupportedException>(
+            () => context.SaveChangesAsync(CancellationToken.None));
+
+        Assert.Same(domainEvent, Assert.Single(entity.DomainEvents));
+
+        await Assert.ThrowsAsync<NotSupportedException>(
+            () => context.SaveChangesAsync(CancellationToken.None));
+
+        Assert.Same(domainEvent, Assert.Single(entity.DomainEvents));
+        Assert.Empty(context.ChangeTracker.Entries<OutboxMessage>());
+    }
+
     private static Order CreateOrder() => Order.Place(
         Guid.Parse("33333333-3333-3333-3333-333333333333"),
         Guid.Parse("44444444-4444-4444-4444-444444444444"),
@@ -135,4 +166,34 @@ public sealed class AtomicOrderOutboxTests(InfrastructureFixture fixture)
     }
 
     private sealed class TestSaveException : Exception;
+
+    private sealed class TestDbContext(
+        DbContextOptions<TestDbContext> options)
+        : DbContext(options)
+    {
+        public DbSet<TestEntity> Entities => Set<TestEntity>();
+
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) =>
+            optionsBuilder.AddInterceptors(new ConvertDomainEventsToOutboxInterceptor());
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<TestEntity>(builder =>
+            {
+                builder.HasKey(entity => entity.Id);
+                builder.Ignore(entity => entity.DomainEvents);
+            });
+            modelBuilder.Entity<OutboxMessage>();
+        }
+    }
+
+    private sealed class TestEntity(Guid id) : Entity
+    {
+        public Guid Id { get; } = id;
+
+        public void Raise(IDomainEvent domainEvent) => AddDomainEvent(domainEvent);
+    }
+
+    private sealed record UnsupportedDomainEvent(Guid Id, DateTimeOffset OccurredOnUtc)
+        : IDomainEvent;
 }

@@ -32,14 +32,20 @@ public sealed class ConvertDomainEventsToOutboxInterceptor : SaveChangesIntercep
             return ValueTask.FromResult(result);
         }
 
-        var domainEvents = context.ChangeTracker
+        var entries = context.ChangeTracker
             .Entries<Entity>()
-            .SelectMany(entry => entry.Entity.DequeueDomainEvents())
+            .Where(entry => entry.Entity.DomainEvents.Count > 0)
+            .ToArray();
+        var outboxMessages = entries
+            .SelectMany(entry => entry.Entity.DomainEvents)
+            .Select(ToOutboxMessage)
             .ToArray();
 
-        foreach (var domainEvent in domainEvents)
+        context.Set<OutboxMessage>().AddRange(outboxMessages);
+
+        foreach (var entry in entries)
         {
-            context.Set<OutboxMessage>().Add(ToOutboxMessage(domainEvent));
+            entry.Entity.DequeueDomainEvents();
         }
 
         return ValueTask.FromResult(result);
