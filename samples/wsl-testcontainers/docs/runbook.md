@@ -2,7 +2,7 @@
 
 Developer and support operations for the WSL Testcontainers sample on managed Windows 11 laptops. The supported path runs `dotnet`, the testhost, the debugger, and Docker Engine inside the managed `Ubuntu-24.04` WSL distribution. Windows only hosts the IDE UI.
 
-Exact supported versions are in [`platform-manifest.md`](platform-manifest.md).
+Exact supported versions are in [`platform-manifest.md`](platform-manifest.md). Qualification status for each gate is in [`qualification-results.md`](qualification-results.md). Until every gate passes there, this sample is a pilot, not a supported platform.
 
 ## Prohibited
 
