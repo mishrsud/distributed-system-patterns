@@ -78,7 +78,7 @@ The SQL Server image is published for `linux/amd64` only. It will not run native
 | Item | Value |
 |---|---|
 | Workflow | `.github/workflows/wsl-testcontainers-sample.yml` |
-| Runner | `ubuntu-latest` (GitHub-hosted); record the resolved runner image version from each qualification run |
+| Runner | `ubuntu-24.04` (GitHub-hosted). Deliberate deviation from the plan's `ubuntu-latest`: `ProcessIdentityTests` asserts Ubuntu 24.04, so label drift would break parity. Record the resolved runner image version from each qualification run. |
 | Docker endpoint | Runner's local `/var/run/docker.sock`; no `DOCKER_HOST` |
 
 ## Change control

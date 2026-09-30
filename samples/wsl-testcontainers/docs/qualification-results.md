@@ -102,11 +102,13 @@ Differences must be explained. An unexplained missing test fails qualification.
 
 - **Visual Studio remote testing is an experimental preview.** Qualification covers only the exact build recorded in the manifest.
 - **LocalStack fidelity gaps** are listed in [`localstack-fidelity.md`](localstack-fidelity.md). EventBridge target resource policies and IAM beyond single-action identity policies still need real-AWS contract tests.
+- **CI container logs are usually empty on failure.** Ryuk removes containers before the diagnostics step runs. The LocalStack SQS/EventBridge timeout path embeds sanitized container logs in the TRX failure message, but SQL Server and PostgreSQL readiness failures do not. Rerun locally to capture them if needed.
+- **The GitHub Actions runner is pinned to `ubuntu-24.04`**, not `ubuntu-latest` as the plan stated, to keep parity with the Ubuntu 24.04 identity test.
 - **The test runner uses the VSTest path** (`UseMicrosoftTestingPlatformRunner=false`, `IsTestingPlatformApplication=false`). The .NET 10 SDK rejects `dotnet test` over VSTest for projects on Microsoft.Testing.Platform. xunit.v3 4.x is on that platform by default. Moving to the platform later changes CLI filter and logger syntax, and it needs re-qualification.
 
 ## Pre-qualification development evidence
 
-The following was observed on 2026-10-01 during implementation on a developer MacBook (macOS, Arm64, Docker Desktop 29.7.2). It is **not** qualification evidence for any gate. It only shows the sample is ready for the managed-laptop run.
+The following was observed on 2026-10-01 during implementation on a developer MacBook (macOS, Arm64, Docker Desktop context `desktop-linux`, Engine 29.7.2). It is **not** qualification evidence for any gate. It only shows the sample is ready for the managed-laptop run.
 
 | Observation | Result |
 |---|---|
@@ -115,7 +117,7 @@ The following was observed on 2026-10-01 during implementation on a developer Ma
 | `ProcessIdentityTests` (Linux, Ubuntu 24.04, no Docker overrides) in the Ubuntu 24.04 SDK container | Pass |
 | `ProcessIdentityTests.Testhost_runs_on_linux` on macOS | Fails as designed (unsupported host) |
 | `SqlServerTests` and `PostgreSqlTests` against real containers from the macOS host | Pass |
-| Testcontainers from inside the SDK container through the Docker Desktop socket | Fails: Ryuk connection timeout, a Docker-Desktop-in-container networking artefact. Not representative of WSL or GitHub-hosted runners. |
+| Testcontainers from inside the SDK container through the Docker Desktop socket | Fails: `ResourceReaperException` (Ryuk initialization cancelled). Probable cause: container-to-host networking through the Docker Desktop socket; not investigated further, and not representative of WSL or GitHub-hosted runners until proven there. |
 | LocalStack tests without `LOCALSTACK_AUTH_TOKEN` | Fail with the prerequisite message (no silent skip) |
 | LocalStack tests with a token | Not run — no token available |
 | `scripts/preflight.sh` emits all 11 identifiers and never prints the token (macOS and Ubuntu 24.04 container) | Pass |
