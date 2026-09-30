@@ -15,4 +15,6 @@ public sealed class OutboxOptions
     public TimeSpan MaxRetryDelay { get; init; } = TimeSpan.FromMinutes(5);
 
     public TimeSpan ProcessedRetention { get; init; } = TimeSpan.FromDays(7);
+
+    public TimeSpan CleanupInterval { get; init; } = TimeSpan.FromHours(1);
 }
