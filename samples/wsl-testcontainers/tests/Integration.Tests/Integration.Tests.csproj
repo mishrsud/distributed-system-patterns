@@ -23,6 +23,10 @@
     <PackageReference Include="AWSSDK.SecurityToken" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Bounded collection parallelism shared by WSL, IDEs, and CI. -->
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../../src/SampleApplication/SampleApplication.csproj" />
   </ItemGroup>
 </Project>
