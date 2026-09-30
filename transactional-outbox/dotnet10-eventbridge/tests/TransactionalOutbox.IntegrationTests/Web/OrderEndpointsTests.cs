@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace TransactionalOutbox.IntegrationTests.Web;
 
@@ -133,10 +134,17 @@ public sealed class OrderEndpointsTests(InfrastructureFixture fixture)
     private WebApplicationFactory<Program> CreateFactory(string? connectionString = null) =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
-            builder.UseEnvironment("Testing");
+            // Development is the environment where minimal APIs throw on bad requests; cover that path.
+            builder.UseEnvironment("Development");
             // UseSetting is visible to Program before Build; ConfigureAppConfiguration is applied too late
             // for the Outbox:Enabled check made while services are registered.
             builder.UseSetting("ConnectionStrings:SqlServer", connectionString ?? fixture.ConnectionString);
             builder.UseSetting("Outbox:Enabled", "false");
+            // appsettings.Development.json would otherwise point at the application database.
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:SqlServer"] = connectionString ?? fixture.ConnectionString,
+                }));
         });
 }

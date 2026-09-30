@@ -32,16 +32,17 @@ public static class DependencyInjection
 
         services.AddOptions<OutboxOptions>()
             .Bind(configuration.GetSection("Outbox"))
+            .Validate(static options => options.BatchSize > 0, "Outbox:BatchSize must be positive.")
+            .Validate(static options => options.MaxAttempts > 0, "Outbox:MaxAttempts must be positive.")
+            .Validate(static options => options.LeaseDuration > TimeSpan.Zero, "Outbox:LeaseDuration must be positive.")
+            .Validate(static options => options.IdleDelay > TimeSpan.Zero, "Outbox:IdleDelay must be positive.")
+            .Validate(static options => options.MaxRetryDelay > TimeSpan.Zero, "Outbox:MaxRetryDelay must be positive.")
             .Validate(
-                static options => options.BatchSize > 0
-                    && options.MaxAttempts > 0
-                    && options.LeaseDuration > TimeSpan.Zero
-                    && options.IdleDelay > TimeSpan.Zero
-                    && options.MaxRetryDelay > TimeSpan.Zero
-                    && options.ProcessedRetention > TimeSpan.Zero
-                    && options.CleanupInterval > TimeSpan.Zero,
-                "Outbox options BatchSize, MaxAttempts, LeaseDuration, IdleDelay, MaxRetryDelay, "
-                + "ProcessedRetention and CleanupInterval must all be positive.")
+                static options => options.ProcessedRetention > TimeSpan.Zero,
+                "Outbox:ProcessedRetention must be positive.")
+            .Validate(
+                static options => options.CleanupInterval > TimeSpan.Zero,
+                "Outbox:CleanupInterval must be positive.")
             .ValidateOnStart();
 
         services.AddOptions<EventBridgeOptions>()
@@ -68,8 +69,10 @@ public static class DependencyInjection
             var options = provider.GetRequiredService<IOptions<EventBridgeOptions>>().Value;
             var config = new AmazonEventBridgeConfig
             {
+                // (MaxErrorRetry + 1) * Timeout = 15 s stays below the default 30 s outbox lease,
+                // so a publish attempt cannot outlive the lease it runs under.
                 MaxErrorRetry = 2,
-                Timeout = TimeSpan.FromSeconds(10),
+                Timeout = TimeSpan.FromSeconds(5),
             };
 
             if (!string.IsNullOrWhiteSpace(options.ServiceUrl))

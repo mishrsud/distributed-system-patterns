@@ -9,7 +9,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<PlaceOrderHandler>();
-builder.Services.AddExceptionHandler<ArgumentExceptionHandler>();
+builder.Services.AddExceptionHandler<RequestExceptionHandler>();
 builder.Services.AddProblemDetails();
 
 var app = builder.Build();
