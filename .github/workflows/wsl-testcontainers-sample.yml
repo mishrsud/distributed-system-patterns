@@ -1,0 +1,133 @@
+name: WSL Testcontainers sample
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - samples/wsl-testcontainers/**
+      - .github/workflows/wsl-testcontainers-sample.yml
+  pull_request:
+    paths:
+      - samples/wsl-testcontainers/**
+      - .github/workflows/wsl-testcontainers-sample.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wsl-testcontainers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-parity:
+    # Pinned to the same Ubuntu release as the managed WSL distribution;
+    # ProcessIdentityTests requires 24.04, so ubuntu-latest drift would break parity.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: samples/wsl-testcontainers
+    env:
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+      RESULTS: ${{ github.workspace }}/samples/wsl-testcontainers/TestResults
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install .NET SDK from global.json
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: samples/wsl-testcontainers/global.json
+
+      - name: Verify local Docker Unix socket
+        run: |
+          if [ -n "${DOCKER_HOST:-}" ]; then
+            echo "::error::DOCKER_HOST must not be set; CI uses the runner's local Unix socket."
+            exit 1
+          fi
+          test -S /var/run/docker.sock
+          docker version --format 'Docker Engine {{.Server.Version}} (API {{.Server.APIVersion}})'
+
+      - name: Preflight
+        run: ./scripts/preflight.sh --format text
+
+      - name: Restore locked packages
+        run: dotnet restore WslTestcontainers.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build WslTestcontainers.slnx --no-restore
+
+      - name: Environment qualification tests
+        run: >
+          dotnet test tests/EnvironmentQualification.Tests --no-build
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=environment-qualification.trx"
+          --results-directory "$RESULTS"
+
+      - name: SQL Server and PostgreSQL tests
+        # Concurrency is bounded by tests/Integration.Tests/xunit.runner.json.
+        run: >
+          dotnet test tests/Integration.Tests --no-build
+          --filter "FullyQualifiedName!~Integration.Tests.LocalStack"
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=integration-databases.trx"
+          --results-directory "$RESULTS"
+
+      - name: LocalStack tests
+        if: env.LOCALSTACK_AUTH_TOKEN != ''
+        run: >
+          dotnet test tests/Integration.Tests --no-build
+          --filter "FullyQualifiedName~Integration.Tests.LocalStack"
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=integration-localstack.trx"
+          --results-directory "$RESULTS"
+
+      - name: Require LocalStack token
+        # Required checks must fail, never skip, when the protected secret is unavailable.
+        if: env.LOCALSTACK_AUTH_TOKEN == ''
+        run: |
+          echo "::error::LOCALSTACK_AUTH_TOKEN secret is not available to this run. Add it as a repository or environment secret; LocalStack tests were not executed."
+          exit 1
+
+      - name: Verify Testcontainers cleanup
+        run: |
+          # Ryuk removes session resources, then itself, shortly after the testhost exits.
+          for attempt in $(seq 1 12); do
+            remaining="$(docker ps -aq --filter label=org.testcontainers | wc -l)"
+            [ "$remaining" -eq 0 ] && exit 0
+            sleep 5
+          done
+          echo "::error::$remaining labelled Testcontainers containers remain after the run."
+          docker ps -a --filter label=org.testcontainers --format '{{.ID}} {{.Image}} {{.Status}}'
+          exit 1
+
+      - name: Collect sanitized diagnostics
+        if: failure()
+        run: |
+          diagnostics="$RESULTS/diagnostics"
+          mkdir -p "$diagnostics"
+          dotnet --info > "$diagnostics/dotnet-info.txt" 2>&1 || true
+          docker version > "$diagnostics/docker-version.txt" 2>&1 || true
+          docker info --format '{{.ServerVersion}} {{.OperatingSystem}} {{.KernelVersion}} {{.NCPU}} {{.MemTotal}}' > "$diagnostics/docker-info.txt" 2>&1 || true
+          cat /etc/os-release > "$diagnostics/os-release.txt"
+          ./scripts/preflight.sh --format text > "$diagnostics/preflight.txt" 2>&1 || true
+          docker ps -a --filter label=org.testcontainers --format '{{.ID}} {{.Image}} {{.Status}}' > "$diagnostics/containers.txt" 2>&1 || true
+          for id in $(docker ps -aq --filter label=org.testcontainers); do
+            docker logs "$id" > "$diagnostics/container-$id.log" 2>&1 || true
+          done
+          # Defence in depth: redact the token from every artifact without echoing it.
+          if [ -n "${LOCALSTACK_AUTH_TOKEN:-}" ]; then
+            find "$RESULTS" -type f -exec perl -pi -e 's/\Q$ENV{LOCALSTACK_AUTH_TOKEN}\E/[REDACTED]/g' {} +
+          fi
+
+      - name: Upload test results and diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wsl-testcontainers-results
+          path: samples/wsl-testcontainers/TestResults
+          if-no-files-found: ignore
+          retention-days: 14

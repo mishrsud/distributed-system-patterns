@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/SampleApplication/SampleApplication.csproj" />
+  <Project Path="tests/EnvironmentQualification.Tests/EnvironmentQualification.Tests.csproj" />
+  <Project Path="tests/Integration.Tests/Integration.Tests.csproj" />
+</Solution>
