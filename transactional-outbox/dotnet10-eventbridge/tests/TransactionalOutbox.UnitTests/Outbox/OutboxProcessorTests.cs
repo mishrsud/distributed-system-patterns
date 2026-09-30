@@ -133,6 +133,18 @@ public sealed class OutboxProcessorTests
     }
 
     [Fact]
+    public async Task ProcessBatchTreatsTimeoutCancellationWithLiveTokenAsRetryable()
+    {
+        var message = Message();
+        var store = new FakeStore { Claimed = [message] };
+        var publisher = new FakeEventPublisher { Handler = _ => throw new TaskCanceledException() };
+
+        await Create(store, publisher).ProcessBatchAsync(WorkerId, CancellationToken.None);
+
+        Assert.StartsWith($"retry:{message.Id}:", Assert.Single(store.Calls));
+    }
+
+    [Fact]
     public async Task ProcessBatchDeadLettersPublisherExceptionAtMaxAttempts()
     {
         var message = Message(attemptCount: 2);

@@ -47,7 +47,7 @@ public sealed partial class OutboxProcessor(
         }
     }
 
-    private Task<bool> RecordOutcomeAsync(
+    private async Task<bool> RecordOutcomeAsync(
         ClaimedOutboxMessage message,
         string workerId,
         PublishResult result,
@@ -55,18 +55,23 @@ public sealed partial class OutboxProcessor(
     {
         if (result.Outcome == PublishOutcome.Success)
         {
-            return store.MarkProcessedAsync(message.Id, workerId, result.EventBridgeEventId!, cancellationToken);
+            return await store.MarkProcessedAsync(message.Id, workerId, result.EventBridgeEventId!, cancellationToken);
         }
 
         if (result.Outcome == PublishOutcome.PermanentFailure || message.AttemptCount >= _options.MaxAttempts)
         {
-            LogDeadLettered(logger, message.Id, message.AttemptCount, result.ErrorSummary);
-            return store.DeadLetterAsync(message.Id, workerId, result.ErrorSummary, cancellationToken);
+            bool deadLettered = await store.DeadLetterAsync(message.Id, workerId, result.ErrorSummary, cancellationToken);
+            if (deadLettered)
+            {
+                LogDeadLettered(logger, message.Id, message.AttemptCount, result.ErrorSummary);
+            }
+
+            return deadLettered;
         }
 
         DateTimeOffset nextAttempt = timeProvider.GetUtcNow()
             + retrySchedule.GetDelay(message.AttemptCount, Random.Shared.NextDouble());
-        return store.ScheduleRetryAsync(message.Id, workerId, nextAttempt, result.ErrorSummary, cancellationToken);
+        return await store.ScheduleRetryAsync(message.Id, workerId, nextAttempt, result.ErrorSummary, cancellationToken);
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Outbox message {MessageId} transition skipped: lease no longer owned by worker {WorkerId}.")]

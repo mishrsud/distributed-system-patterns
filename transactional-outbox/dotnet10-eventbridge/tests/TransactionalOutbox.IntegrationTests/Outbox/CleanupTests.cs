@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TransactionalOutbox.Infrastructure.Outbox;
 using TransactionalOutbox.Infrastructure.Persistence;
@@ -33,11 +33,12 @@ public sealed class CleanupTests(InfrastructureFixture fixture)
         services.AddScoped<AppDbContext>(_ => fixture.CreateContext());
         services.AddScoped<IOutboxStore, SqlServerOutboxStore>();
         await using ServiceProvider provider = services.BuildServiceProvider();
+        var logger = new CapturingLogger();
         var service = new OutboxCleanupService(
             provider.GetRequiredService<IServiceScopeFactory>(),
             options,
             TimeProvider.System,
-            NullLogger<OutboxCleanupService>.Instance);
+            logger);
 
         await service.StartAsync(CancellationToken.None);
         try
@@ -46,12 +47,16 @@ public sealed class CleanupTests(InfrastructureFixture fixture)
             {
                 await using var context = fixture.CreateContext();
                 return !await context.OutboxMessages.AnyAsync(m => m.Id == oldProcessed.Id);
-            });
+            },
+            logger);
         }
         finally
         {
             await service.StopAsync(CancellationToken.None);
         }
+
+        Assert.DoesNotContain(logger.Entries, e => e.Level >= LogLevel.Error);
+        Assert.True(service.ExecuteTask!.IsCompletedSuccessfully);
 
         await using var verify = fixture.CreateContext();
         var remaining = await verify.OutboxMessages.AsNoTracking().Select(m => m.Id).ToListAsync();
@@ -69,13 +74,49 @@ public sealed class CleanupTests(InfrastructureFixture fixture)
         return message;
     }
 
-    private static async Task WaitForAsync(Func<Task<bool>> condition)
+    private static async Task WaitForAsync(Func<Task<bool>> condition, CapturingLogger logger)
     {
         var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
         while (!await condition())
         {
-            Assert.True(DateTimeOffset.UtcNow < deadline, "Cleanup did not run within the timeout.");
+            Assert.True(DateTimeOffset.UtcNow < deadline,
+                $"Cleanup did not run within the timeout. Logged: {string.Join(" | ", logger.Entries.Select(e => $"{e.Level}: {e.Message}"))}");
             await Task.Delay(100);
+        }
+    }
+
+    private sealed class CapturingLogger : ILogger<OutboxCleanupService>
+    {
+        private readonly object _gate = new();
+        private readonly List<(LogLevel Level, string Message)> _entries = [];
+
+        public IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return [.. _entries];
+                }
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate)
+            {
+                _entries.Add((logLevel, formatter(state, exception)));
+            }
         }
     }
 }

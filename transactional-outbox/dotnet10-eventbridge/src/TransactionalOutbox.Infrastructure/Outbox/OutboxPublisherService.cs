@@ -28,7 +28,7 @@ public sealed partial class OutboxPublisherService(
                 }
             }
         }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        catch (Exception) when (stoppingToken.IsCancellationRequested)
         {
             // Host shutdown: exit cleanly.
         }
@@ -45,7 +45,7 @@ public sealed partial class OutboxPublisherService(
             var processor = scope.ServiceProvider.GetRequiredService<OutboxProcessor>();
             return await processor.ProcessBatchAsync(_workerId, stoppingToken) > 0;
         }
-        catch (Exception ex) when (!(ex is OperationCanceledException && stoppingToken.IsCancellationRequested))
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {
             LogCycleFailed(logger, ex);
             return false;

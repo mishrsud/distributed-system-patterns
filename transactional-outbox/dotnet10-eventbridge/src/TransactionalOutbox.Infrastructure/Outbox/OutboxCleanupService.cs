@@ -23,7 +23,7 @@ public sealed partial class OutboxCleanupService(
                 await Task.Delay(_options.CleanupInterval, stoppingToken);
             }
         }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        catch (Exception) when (stoppingToken.IsCancellationRequested)
         {
             // Host shutdown: exit cleanly.
         }
@@ -39,7 +39,7 @@ public sealed partial class OutboxCleanupService(
             int deleted = await store.DeleteProcessedBeforeAsync(cutoff, stoppingToken);
             LogCleaned(logger, deleted, cutoff);
         }
-        catch (Exception ex) when (!(ex is OperationCanceledException && stoppingToken.IsCancellationRequested))
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {
             LogCleanupFailed(logger, ex);
         }
