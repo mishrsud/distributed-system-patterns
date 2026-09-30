@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -18,10 +19,21 @@ public sealed class InfrastructureFixture : IAsyncLifetime
         "Server=localhost,14339;Database=TransactionalOutboxTests;User Id=sa;" +
         "Password=Local_dev_Only_123!;TrustServerCertificate=True";
 
+    public const string RemoteDatabaseOptInVariable =
+        "TRANSACTIONAL_OUTBOX_ALLOW_REMOTE_TEST_DATABASE";
+
     public InfrastructureFixture()
+        : this(
+            Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
+                ?? DefaultConnectionString,
+            Environment.GetEnvironmentVariable(RemoteDatabaseOptInVariable))
     {
-        ConnectionString = Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
-            ?? DefaultConnectionString;
+    }
+
+    // Internal so xUnit still sees exactly one public constructor on the collection fixture.
+    internal InfrastructureFixture(string connectionString, string? destructiveDatabaseTestsOptIn)
+    {
+        ConnectionString = connectionString;
 
         var connectionStringBuilder = new SqlConnectionStringBuilder(ConnectionString);
         if (!string.Equals(
@@ -31,6 +43,17 @@ public sealed class InfrastructureFixture : IAsyncLifetime
         {
             throw new InvalidOperationException(
                 "Integration tests may only recreate the TransactionalOutboxTests database.");
+        }
+
+        var remoteAllowed = string.Equals(
+            destructiveDatabaseTestsOptIn,
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+        if (!remoteAllowed && !IsLoopbackDataSource(connectionStringBuilder.DataSource))
+        {
+            throw new InvalidOperationException(
+                "Integration tests drop and recreate their database, so they only run against a " +
+                $"loopback SQL Server. Set {RemoteDatabaseOptInVariable}=true to allow a remote host.");
         }
     }
 
@@ -56,5 +79,26 @@ public sealed class InfrastructureFixture : IAsyncLifetime
             [new ConvertDomainEventsToOutboxInterceptor(), .. additionalInterceptors];
 
         return new AppDbContext(options, interceptors);
+    }
+
+    private static bool IsLoopbackDataSource(string dataSource)
+    {
+        var host = dataSource.Trim();
+        if (host.StartsWith("tcp:", StringComparison.OrdinalIgnoreCase))
+        {
+            host = host["tcp:".Length..];
+        }
+
+        var separator = host.IndexOfAny([',', '\\']);
+        if (separator >= 0)
+        {
+            host = host[..separator];
+        }
+
+        host = host.Trim().Trim('[', ']');
+
+        return host is "." or "(local)"
+            || string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+            || (IPAddress.TryParse(host, out var address) && IPAddress.IsLoopback(address));
     }
 }

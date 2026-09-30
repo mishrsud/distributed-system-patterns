@@ -1,9 +1,11 @@
+using System.Data.Common;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using TransactionalOutbox.Core.Common;
 using TransactionalOutbox.Core.Orders;
 using TransactionalOutbox.Infrastructure.Outbox;
+using TransactionalOutbox.Infrastructure.Persistence;
 using TransactionalOutbox.Infrastructure.Persistence.Interceptors;
 
 namespace TransactionalOutbox.IntegrationTests.Persistence;
@@ -57,18 +59,27 @@ public sealed class AtomicOrderOutboxTests(InfrastructureFixture fixture)
     }
 
     [Fact]
-    public async Task SaveFailureAfterConversionPersistsNeitherOrderNorOutboxMessage()
+    public async Task SaveFailureAfterDatabaseCommandPersistsNeitherOrderNorOutboxMessage()
     {
         await fixture.RecreateDatabaseAsync();
-        var interceptor = new ThrowAfterConversionInterceptor(throwOnlyOnce: false);
+        var interceptor = new ThrowAfterInsertCommandInterceptor();
 
-        await using (var context = fixture.CreateContext(interceptor))
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlServer(fixture.ConnectionString)
+            .AddInterceptors(interceptor)
+            .Options;
+        await using (var context = new AppDbContext(
+            options,
+            [new ConvertDomainEventsToOutboxInterceptor()]))
         {
             context.Orders.Add(CreateOrder());
 
-            await Assert.ThrowsAsync<TestSaveException>(
+            var exception = await Assert.ThrowsAsync<DbUpdateException>(
                 () => context.SaveChangesAsync(CancellationToken.None));
+            Assert.IsType<TestSaveException>(exception.InnerException);
         }
+
+        Assert.True(interceptor.InsertCommandExecuted);
 
         await using var verificationContext = fixture.CreateContext();
         Assert.Equal(0, await verificationContext.Orders.CountAsync(CancellationToken.None));
@@ -80,13 +91,20 @@ public sealed class AtomicOrderOutboxTests(InfrastructureFixture fixture)
     {
         await fixture.RecreateDatabaseAsync();
         var interceptor = new ThrowAfterConversionInterceptor(throwOnlyOnce: true);
+        var order = CreateOrder();
 
         await using (var context = fixture.CreateContext(interceptor))
         {
-            context.Orders.Add(CreateOrder());
+            context.Orders.Add(order);
 
             await Assert.ThrowsAsync<TestSaveException>(
                 () => context.SaveChangesAsync(CancellationToken.None));
+
+            Assert.True(interceptor.SawAddedOutboxMessage);
+            Assert.Empty(order.DomainEvents);
+            var outboxEntry = Assert.Single(context.ChangeTracker.Entries<OutboxMessage>());
+            Assert.Equal(EntityState.Added, outboxEntry.State);
+
             await context.SaveChangesAsync(CancellationToken.None);
         }
 
@@ -150,11 +168,17 @@ public sealed class AtomicOrderOutboxTests(InfrastructureFixture fixture)
     {
         private bool _hasThrown;
 
+        public bool SawAddedOutboxMessage { get; private set; }
+
         public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
             DbContextEventData eventData,
             InterceptionResult<int> result,
             CancellationToken cancellationToken = default)
         {
+            SawAddedOutboxMessage = eventData.Context?.ChangeTracker
+                .Entries<OutboxMessage>()
+                .Count(entry => entry.State == EntityState.Added) == 1;
+
             if (!throwOnlyOnce || !_hasThrown)
             {
                 _hasThrown = true;
@@ -162,6 +186,60 @@ public sealed class AtomicOrderOutboxTests(InfrastructureFixture fixture)
             }
 
             return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class ThrowAfterInsertCommandInterceptor : DbCommandInterceptor
+    {
+        public bool InsertCommandExecuted { get; private set; }
+
+        public override DbDataReader ReaderExecuted(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result)
+        {
+            ThrowAfterInsert(command, result);
+            return base.ReaderExecuted(command, eventData, result);
+        }
+
+        public override ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowAfterInsert(command, result);
+            return base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override int NonQueryExecuted(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            int result)
+        {
+            ThrowAfterInsert(command);
+            return base.NonQueryExecuted(command, eventData, result);
+        }
+
+        public override ValueTask<int> NonQueryExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            int result,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowAfterInsert(command);
+            return base.NonQueryExecutedAsync(command, eventData, result, cancellationToken);
+        }
+
+        private void ThrowAfterInsert(DbCommand command, DbDataReader? reader = null)
+        {
+            if (command.CommandText.Contains("INSERT INTO", StringComparison.OrdinalIgnoreCase))
+            {
+                InsertCommandExecuted = true;
+                // An open reader would block the transaction rollback this test depends on.
+                reader?.Dispose();
+                throw new TestSaveException();
+            }
         }
     }
 

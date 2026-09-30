@@ -24,14 +24,14 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         builder.Property(message => message.RowVersion).IsRowVersion();
 
         builder.HasIndex(message => new
-            {
-                message.ProcessedOnUtc,
-                message.DeadLetteredOnUtc,
-                message.NextAttemptOnUtc,
-                message.LockedUntilUtc,
-                message.OccurredOnUtc,
-                message.Id
-            })
+        {
+            message.ProcessedOnUtc,
+            message.DeadLetteredOnUtc,
+            message.NextAttemptOnUtc,
+            message.LockedUntilUtc,
+            message.OccurredOnUtc,
+            message.Id
+        })
             .HasDatabaseName("IX_OutboxMessages_Eligibility")
             .HasFilter("[ProcessedOnUtc] IS NULL AND [DeadLetteredOnUtc] IS NULL");
     }
