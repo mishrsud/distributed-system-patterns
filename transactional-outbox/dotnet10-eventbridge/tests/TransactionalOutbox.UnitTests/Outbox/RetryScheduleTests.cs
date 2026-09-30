@@ -41,4 +41,8 @@ public sealed class RetryScheduleTests
     [Fact]
     public void NonPositiveAttemptCountsUseFirstDelay() =>
         Assert.Equal(TimeSpan.FromSeconds(2), Create().GetDelay(0, 0d));
+
+    [Fact]
+    public void NanJitterIsTreatedAsZero() =>
+        Assert.Equal(TimeSpan.FromSeconds(4), Create().GetDelay(2, double.NaN));
 }

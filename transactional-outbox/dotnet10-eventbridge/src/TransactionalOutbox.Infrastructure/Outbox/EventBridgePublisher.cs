@@ -76,9 +76,13 @@ public sealed class EventBridgePublisher(IAmazonEventBridge client, IOptions<Eve
                 : PublishResult.Retryable(entry.ErrorCode, summary);
         }
 
-        if (response.FailedEntryCount is not null and not 0)
+        if (response.FailedEntryCount != 0)
         {
-            return PublishResult.Retryable(null, $"PutEvents reported {response.FailedEntryCount} failed entries.");
+            return PublishResult.Retryable(
+                null,
+                response.FailedEntryCount is null
+                    ? "PutEvents response has no FailedEntryCount."
+                    : $"PutEvents reported {response.FailedEntryCount} failed entries.");
         }
 
         if (string.IsNullOrEmpty(entry.EventId))

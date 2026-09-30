@@ -17,7 +17,7 @@ public sealed class RetrySchedule(IOptions<OutboxOptions> options)
     {
         int exponent = Math.Clamp(attemptCount, 1, MaxExponent);
         double baseSeconds = Math.Min(Math.Pow(2, exponent), _maxDelay.TotalSeconds);
-        double sample = Math.Clamp(jitterSample, 0d, 1d);
+        double sample = double.IsNaN(jitterSample) ? 0d : Math.Clamp(jitterSample, 0d, 1d);
         double seconds = Math.Min(baseSeconds * (1 + (MaxJitterFraction * sample)), _maxDelay.TotalSeconds);
         return TimeSpan.FromSeconds(seconds);
     }

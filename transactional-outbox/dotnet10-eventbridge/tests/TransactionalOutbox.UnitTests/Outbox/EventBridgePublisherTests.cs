@@ -137,6 +137,37 @@ public sealed class EventBridgePublisherTests
     }
 
     [Fact]
+    public async Task NullFailedEntryCountIsRetryable()
+    {
+        var fake = new FakeEventBridge
+        {
+            PutEvents = _ => new PutEventsResponse
+            {
+                FailedEntryCount = null,
+                Entries = [new PutEventsResultEntry { EventId = "eb-1" }],
+            },
+        };
+
+        PublishResult result = await Create(fake).PublishAsync(Message, CancellationToken.None);
+
+        Assert.Equal(PublishOutcome.RetryableFailure, result.Outcome);
+        Assert.Null(result.EventBridgeEventId);
+    }
+
+    [Theory]
+    [InlineData(typeof(OperationCanceledException))]
+    [InlineData(typeof(TaskCanceledException))]
+    public async Task ClientCancellationWithoutSuppliedTokenCancelledIsRetryable(Type exceptionType)
+    {
+        var fake = new FakeEventBridge { PutEvents = _ => throw (Exception)Activator.CreateInstance(exceptionType)! };
+
+        PublishResult result = await Create(fake).PublishAsync(Message, CancellationToken.None);
+
+        Assert.Equal(PublishOutcome.RetryableFailure, result.Outcome);
+        Assert.Equal(exceptionType.Name, result.ErrorCode);
+    }
+
+    [Fact]
     public async Task ServiceExceptionIsRetryable()
     {
         var fake = new FakeEventBridge
