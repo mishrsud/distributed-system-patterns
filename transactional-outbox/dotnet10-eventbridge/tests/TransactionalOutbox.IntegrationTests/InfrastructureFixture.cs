@@ -73,7 +73,7 @@ public sealed class InfrastructureFixture : IAsyncLifetime
     public AppDbContext CreateContext(params ISaveChangesInterceptor[] additionalInterceptors)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlServer(ConnectionString)
+            .UseSqlServer(ConnectionString, sql => sql.EnableRetryOnFailure())
             .Options;
         ISaveChangesInterceptor[] interceptors =
             [new ConvertDomainEventsToOutboxInterceptor(), .. additionalInterceptors];
