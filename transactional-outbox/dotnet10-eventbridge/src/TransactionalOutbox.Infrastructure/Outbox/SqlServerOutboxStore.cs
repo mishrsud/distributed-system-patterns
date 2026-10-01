@@ -120,6 +120,27 @@ public sealed class SqlServerOutboxStore(AppDbContext context) : IOutboxStore
         return rows == 1;
     }
 
+    public async Task<bool> ReleaseAsync(
+        Guid id,
+        string workerId,
+        CancellationToken cancellationToken)
+    {
+        // NextAttemptOnUtc is left alone, so the row is claimable again immediately.
+        var rows = await context.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            UPDATE dbo.OutboxMessages
+            SET AttemptCount = AttemptCount - 1,
+                LockedBy = NULL,
+                LockedUntilUtc = NULL
+            WHERE Id = {id}
+              AND LockedBy = {workerId}
+              AND ProcessedOnUtc IS NULL
+              AND DeadLetteredOnUtc IS NULL
+            """,
+            cancellationToken);
+        return rows == 1;
+    }
+
     public async Task<bool> DeadLetterAsync(
         Guid id,
         string workerId,

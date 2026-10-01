@@ -173,6 +173,51 @@ public sealed class LeaseAndStateTransitionTests(InfrastructureFixture fixture)
     }
 
     [Fact]
+    public async Task ReleaseClearsLeaseUndoesTheAttemptAndLeavesRowClaimable()
+    {
+        await fixture.RecreateDatabaseAsync();
+        var message = OutboxTestData.CreateDue();
+        await SeedAsync(message);
+        Assert.Equal(1, Assert.Single(await ClaimAsync("worker-1")).AttemptCount);
+
+        await using (var context = fixture.CreateContext())
+        {
+            var store = new SqlServerOutboxStore(context);
+            Assert.True(await store.ReleaseAsync(message.Id, "worker-1", CancellationToken.None));
+
+            var stored = await OutboxTestData.LoadAsync(context, message.Id);
+            Assert.Null(stored.LockedBy);
+            Assert.Null(stored.LockedUntilUtc);
+            Assert.Equal(0, stored.AttemptCount);
+            Assert.Null(stored.ProcessedOnUtc);
+            Assert.Null(stored.DeadLetteredOnUtc);
+        }
+
+        var reclaimed = Assert.Single(await ClaimAsync("worker-2"));
+        Assert.Equal(message.Id, reclaimed.Id);
+        Assert.Equal(1, reclaimed.AttemptCount);
+    }
+
+    [Fact]
+    public async Task ReleaseReturnsFalseForStaleWorkerAndLeavesRowUntouched()
+    {
+        await fixture.RecreateDatabaseAsync();
+        var message = OutboxTestData.CreateDue();
+        await SeedAsync(message);
+        await ClaimAsync("worker-1");
+
+        await using var context = fixture.CreateContext();
+        var store = new SqlServerOutboxStore(context);
+
+        Assert.False(await store.ReleaseAsync(message.Id, "worker-2", CancellationToken.None));
+
+        var stored = await OutboxTestData.LoadAsync(context, message.Id);
+        Assert.Equal("worker-1", stored.LockedBy);
+        Assert.NotNull(stored.LockedUntilUtc);
+        Assert.Equal(1, stored.AttemptCount);
+    }
+
+    [Fact]
     public async Task DeadLetterMarksRowAndExcludesItFromFutureClaims()
     {
         await fixture.RecreateDatabaseAsync();

@@ -23,14 +23,29 @@ public sealed class OutboxProcessorTests
         FakeStore store,
         FakeEventPublisher publisher,
         FakeLogger? logger = null,
-        int maxAttempts = 10)
+        int maxAttempts = 10,
+        ManualTimeProvider? timeProvider = null)
     {
-        var options = Options.Create(new OutboxOptions { MaxAttempts = maxAttempts, BatchSize = 5 });
+        var options = Options.Create(new OutboxOptions
+        {
+            MaxAttempts = maxAttempts,
+            BatchSize = 5,
+            LeaseDuration = TimeSpan.FromSeconds(30),
+        });
+
+        // 5 s x (2 + 1) = a 15 s publish budget under the 30 s lease.
+        var eventBridgeOptions = Options.Create(new EventBridgeOptions
+        {
+            RequestTimeout = TimeSpan.FromSeconds(5),
+            MaxErrorRetry = 2,
+        });
         return new OutboxProcessor(
             store,
             publisher,
             new RetrySchedule(options),
             options,
+            eventBridgeOptions,
+            timeProvider ?? new ManualTimeProvider(),
             logger ?? new FakeLogger());
     }
 
@@ -191,6 +206,90 @@ public sealed class OutboxProcessorTests
         Assert.Contains(logger.Entries, e => e.Level == LogLevel.Warning);
     }
 
+    [Fact]
+    public async Task ProcessBatchPublishesEveryClaimedMessageWhenTimeDoesNotAdvance()
+    {
+        Guid[] ids = [.. Enumerable.Range(0, 5).Select(_ => Guid.NewGuid())];
+        var store = new FakeStore { Claimed = [.. ids.Select(id => Message(id: id))] };
+        var publisher = new FakeEventPublisher();
+
+        int claimed = await Create(store, publisher).ProcessBatchAsync(WorkerId, CancellationToken.None);
+
+        Assert.Equal(5, claimed);
+        Assert.Equal(ids, publisher.Published.Select(m => m.Id));
+        Assert.All(store.Calls, call => Assert.StartsWith("processed:", call));
+        Assert.Equal(5, store.Calls.Count);
+    }
+
+    [Fact]
+    public async Task ProcessBatchReleasesRemainingMessagesOnceTheLeaseCannotCoverAnotherPublish()
+    {
+        Guid[] ids = [.. Enumerable.Range(0, 5).Select(_ => Guid.NewGuid())];
+        var store = new FakeStore { Claimed = [.. ids.Select(id => Message(id: id))] };
+        var time = new ManualTimeProvider();
+        var publisher = new FakeEventPublisher
+        {
+            // Each publish takes 10 s. Before the third, 20 s have elapsed and 20 + 15 >= 30.
+            Handler = _ =>
+            {
+                time.Advance(TimeSpan.FromSeconds(10));
+                return PublishResult.Succeeded("eb");
+            },
+        };
+        var logger = new FakeLogger();
+
+        int claimed = await Create(store, publisher, logger, timeProvider: time)
+            .ProcessBatchAsync(WorkerId, CancellationToken.None);
+
+        Assert.Equal(5, claimed);
+        Assert.Equal(ids[..2], publisher.Published.Select(m => m.Id));
+        Assert.Equal(
+            [
+                $"processed:{ids[0]}:{WorkerId}:eb",
+                $"processed:{ids[1]}:{WorkerId}:eb",
+                $"release:{ids[2]}:{WorkerId}",
+                $"release:{ids[3]}:{WorkerId}",
+                $"release:{ids[4]}:{WorkerId}",
+            ],
+            store.Calls);
+        var warning = Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("3", warning.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ProcessBatchRecordsSuccessEvenWhenShutdownIsRequestedDuringThePublish()
+    {
+        using var shutdown = new CancellationTokenSource();
+        var message = Message();
+        var store = new FakeStore { Claimed = [message] };
+        var publisher = new FakeEventPublisher
+        {
+            Handler = _ =>
+            {
+                shutdown.Cancel();
+                return PublishResult.Succeeded("eb-1");
+            },
+        };
+
+        await Create(store, publisher).ProcessBatchAsync(WorkerId, shutdown.Token);
+
+        Assert.Equal([$"processed:{message.Id}:{WorkerId}:eb-1"], store.Calls);
+        Assert.False(store.MarkProcessedTokenWasCancelled);
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _ticks;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => _ticks;
+
+        public override DateTimeOffset GetUtcNow() => Now.AddTicks(_ticks);
+
+        public void Advance(TimeSpan by) => _ticks += by.Ticks;
+    }
+
     private sealed class FakeEventPublisher : IEventPublisher
     {
         public List<ClaimedOutboxMessage> Published { get; } = [];
@@ -223,6 +322,8 @@ public sealed class OutboxProcessorTests
 
         public string? LastRetryError { get; private set; }
 
+        public bool MarkProcessedTokenWasCancelled { get; private set; }
+
         public Task<IReadOnlyList<ClaimedOutboxMessage>> ClaimAsync(
             string workerId, int batchSize, TimeSpan leaseDuration, CancellationToken cancellationToken)
         {
@@ -234,6 +335,7 @@ public sealed class OutboxProcessorTests
         public Task<bool> MarkProcessedAsync(Guid id, string workerId, string eventBridgeEventId, CancellationToken cancellationToken)
         {
             Calls.Add($"processed:{id}:{workerId}:{eventBridgeEventId}");
+            MarkProcessedTokenWasCancelled = cancellationToken.IsCancellationRequested;
             return Task.FromResult(TransitionResult);
         }
 
@@ -243,6 +345,12 @@ public sealed class OutboxProcessorTests
             RetryDelays.Add(delay);
             LastError = errorMessage;
             LastRetryError = errorMessage;
+            return Task.FromResult(TransitionResult);
+        }
+
+        public Task<bool> ReleaseAsync(Guid id, string workerId, CancellationToken cancellationToken)
+        {
+            Calls.Add($"release:{id}:{workerId}");
             return Task.FromResult(TransitionResult);
         }
 

@@ -43,11 +43,22 @@ public static class DependencyInjection
             .Validate(
                 static options => options.CleanupInterval > TimeSpan.Zero,
                 "Outbox:CleanupInterval must be positive.")
+            .Validate<IOptions<EventBridgeOptions>>(
+                static (options, eventBridge) => options.LeaseDuration > eventBridge.Value.MaxPublishDuration,
+                "Outbox:LeaseDuration must be longer than one publish budget, " +
+                "EventBridge:RequestTimeout x (EventBridge:MaxErrorRetry + 1); " +
+                "otherwise a publish could outlive the lease it runs under.")
             .ValidateOnStart();
 
         services.AddOptions<EventBridgeOptions>()
             .Bind(configuration.GetSection("EventBridge"))
             .ValidateDataAnnotations()
+            .Validate(
+                static options => options.RequestTimeout > TimeSpan.Zero,
+                "EventBridge:RequestTimeout must be positive.")
+            .Validate(
+                static options => options.MaxErrorRetry >= 0,
+                "EventBridge:MaxErrorRetry must not be negative.")
             .ValidateOnStart();
 
         services.TryAddSingleton(TimeProvider.System);
@@ -69,10 +80,13 @@ public static class DependencyInjection
             var options = provider.GetRequiredService<IOptions<EventBridgeOptions>>().Value;
             var config = new AmazonEventBridgeConfig
             {
-                // (MaxErrorRetry + 1) * Timeout = 15 s stays below the default 30 s outbox lease,
-                // so a publish attempt cannot outlive the lease it runs under.
-                MaxErrorRetry = 2,
-                Timeout = TimeSpan.FromSeconds(5),
+                // Together these bound one publish to roughly RequestTimeout x (MaxErrorRetry + 1)
+                // (15 s by default; the SDK's backoff between retries adds a little). Startup validation
+                // keeps Outbox:LeaseDuration above that budget, so a single publish is not expected to
+                // outlive its lease, and OutboxProcessor stops a batch before the remaining lease drops
+                // below one budget.
+                MaxErrorRetry = options.MaxErrorRetry,
+                Timeout = options.RequestTimeout,
             };
 
             if (!string.IsNullOrWhiteSpace(options.ServiceUrl))

@@ -12,6 +12,11 @@ public interface IOutboxStore
     /// </summary>
     Task<bool> ScheduleRetryAsync(Guid id, string workerId, TimeSpan delay, string errorMessage, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Gives a claimed row back without attempting it: clears the lease and undoes the attempt the claim counted.
+    /// </summary>
+    Task<bool> ReleaseAsync(Guid id, string workerId, CancellationToken cancellationToken);
+
     Task<bool> DeadLetterAsync(Guid id, string workerId, string errorMessage, CancellationToken cancellationToken);
 
     Task<int> DeleteProcessedBeforeAsync(DateTimeOffset cutoff, CancellationToken cancellationToken);

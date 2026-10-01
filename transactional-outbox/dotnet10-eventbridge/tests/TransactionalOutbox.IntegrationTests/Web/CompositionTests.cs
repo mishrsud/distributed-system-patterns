@@ -77,14 +77,63 @@ public sealed class CompositionTests
     }
 
     [Fact]
-    public void SdkRetryBudgetStaysBelowDefaultLease()
+    public void DefaultSdkTimeoutAndRetriesComeFromEventBridgeOptions()
     {
         using var provider = Build().BuildServiceProvider();
 
         var config = provider.GetRequiredService<IAmazonEventBridge>().Config;
+        var options = provider.GetRequiredService<IOptions<EventBridgeOptions>>().Value;
 
-        Assert.True(
-            (config.MaxErrorRetry + 1) * config.Timeout!.Value < new OutboxOptions().LeaseDuration);
+        Assert.Equal(TimeSpan.FromSeconds(5), config.Timeout);
+        Assert.Equal(2, config.MaxErrorRetry);
+        Assert.Equal(TimeSpan.FromSeconds(15), options.MaxPublishDuration);
+        Assert.True(provider.GetRequiredService<IOptions<OutboxOptions>>().Value.LeaseDuration > options.MaxPublishDuration);
+    }
+
+    [Fact]
+    public void ConfiguredSdkTimeoutAndRetriesReachTheClient()
+    {
+        using var provider = Build(
+            ("EventBridge:RequestTimeout", "00:00:04"),
+            ("EventBridge:MaxErrorRetry", "3")).BuildServiceProvider();
+
+        var config = provider.GetRequiredService<IAmazonEventBridge>().Config;
+
+        Assert.Equal(TimeSpan.FromSeconds(4), config.Timeout);
+        Assert.Equal(3, config.MaxErrorRetry);
+        Assert.Equal(
+            TimeSpan.FromSeconds(16),
+            provider.GetRequiredService<IOptions<EventBridgeOptions>>().Value.MaxPublishDuration);
+    }
+
+    [Theory]
+    [InlineData("00:00:15", "00:00:05", "2")] // lease equal to the 15 s budget
+    [InlineData("00:00:30", "00:00:10", "2")] // 30 s budget exceeds the default lease
+    public void LeaseNotLongerThanOnePublishBudgetFailsValidation(string lease, string timeout, string retries)
+    {
+        using var provider = Build(
+            ("Outbox:LeaseDuration", lease),
+            ("EventBridge:RequestTimeout", timeout),
+            ("EventBridge:MaxErrorRetry", retries)).BuildServiceProvider();
+
+        var exception = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<OutboxOptions>>().Value);
+
+        Assert.Contains("Outbox:LeaseDuration", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("EventBridge:RequestTimeout", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("RequestTimeout", "00:00:00")]
+    [InlineData("MaxErrorRetry", "-1")]
+    public void InvalidSdkBudgetOptionFailsValidationNamingTheOption(string name, string value)
+    {
+        using var provider = Build(($"EventBridge:{name}", value)).BuildServiceProvider();
+
+        var exception = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<EventBridgeOptions>>().Value);
+
+        Assert.Contains($"EventBridge:{name}", exception.Message, StringComparison.Ordinal);
     }
 
     private static List<Type?> HostedTypes(IServiceCollection services) =>

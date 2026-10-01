@@ -115,6 +115,9 @@ public sealed class OutboxPublisherServiceTests
         public Task<bool> ScheduleRetryAsync(Guid id, string workerId, TimeSpan delay, string errorMessage, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<bool> ReleaseAsync(Guid id, string workerId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<bool> DeadLetterAsync(Guid id, string workerId, string errorMessage, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

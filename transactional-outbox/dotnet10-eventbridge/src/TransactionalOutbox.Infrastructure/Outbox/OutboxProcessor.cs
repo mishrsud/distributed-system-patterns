@@ -8,9 +8,14 @@ public sealed partial class OutboxProcessor(
     IEventPublisher publisher,
     RetrySchedule retrySchedule,
     IOptions<OutboxOptions> options,
+    IOptions<EventBridgeOptions> eventBridgeOptions,
+    TimeProvider timeProvider,
     ILogger<OutboxProcessor> logger)
 {
+    private static readonly TimeSpan SuccessRecordTimeout = TimeSpan.FromSeconds(5);
+
     private readonly OutboxOptions _options = options.Value;
+    private readonly TimeSpan _maxPublishDuration = eventBridgeOptions.Value.MaxPublishDuration;
 
     /// <summary>
     /// Claims one batch and publishes each message, recording the outcome. Returns the number claimed.
@@ -19,9 +24,20 @@ public sealed partial class OutboxProcessor(
     {
         IReadOnlyList<ClaimedOutboxMessage> batch = await store.ClaimAsync(
             workerId, _options.BatchSize, _options.LeaseDuration, cancellationToken);
+        long claimedAt = timeProvider.GetTimestamp();
 
-        foreach (ClaimedOutboxMessage message in batch)
+        for (int index = 0; index < batch.Count; index++)
         {
+            // Publishes run one at a time under a lease taken for the whole batch. Stop before the
+            // remaining lease is shorter than one publish budget, so a slow EventBridge cannot leave
+            // later rows publishing after their lease expired, while another worker reclaims them.
+            if (timeProvider.GetElapsedTime(claimedAt) + _maxPublishDuration >= _options.LeaseDuration)
+            {
+                await ReleaseRemainingAsync(batch, index, workerId, cancellationToken);
+                break;
+            }
+
+            ClaimedOutboxMessage message = batch[index];
             PublishResult result = await PublishAsync(message, cancellationToken);
             bool transitioned = await RecordOutcomeAsync(message, workerId, result, cancellationToken);
             if (!transitioned)
@@ -31,6 +47,23 @@ public sealed partial class OutboxProcessor(
         }
 
         return batch.Count;
+    }
+
+    private async Task ReleaseRemainingAsync(
+        IReadOnlyList<ClaimedOutboxMessage> batch,
+        int firstUnpublished,
+        string workerId,
+        CancellationToken cancellationToken)
+    {
+        LogBatchStopped(logger, batch.Count - firstUnpublished, workerId);
+        for (int index = firstUnpublished; index < batch.Count; index++)
+        {
+            Guid id = batch[index].Id;
+            if (!await store.ReleaseAsync(id, workerId, cancellationToken))
+            {
+                LogLeaseLost(logger, id, workerId);
+            }
+        }
     }
 
     private async Task<PublishResult> PublishAsync(ClaimedOutboxMessage message, CancellationToken cancellationToken)
@@ -54,7 +87,11 @@ public sealed partial class OutboxProcessor(
     {
         if (result.Outcome == PublishOutcome.Success)
         {
-            return await store.MarkProcessedAsync(message.Id, workerId, result.EventBridgeEventId!, cancellationToken);
+            // EventBridge has accepted the event. Record that even if shutdown began during the publish:
+            // abandoning the update now would only guarantee a duplicate after the lease expires. A short
+            // timeout of its own (not linked to shutdown) still keeps a hung database from blocking stop.
+            using var recordTimeout = new CancellationTokenSource(SuccessRecordTimeout);
+            return await store.MarkProcessedAsync(message.Id, workerId, result.EventBridgeEventId!, recordTimeout.Token);
         }
 
         if (result.Outcome == PublishOutcome.PermanentFailure || message.AttemptCount >= _options.MaxAttempts)
@@ -74,6 +111,9 @@ public sealed partial class OutboxProcessor(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Outbox message {MessageId} transition skipped: lease no longer owned by worker {WorkerId}.")]
     private static partial void LogLeaseLost(ILogger logger, Guid messageId, string workerId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Outbox batch stopped early: released {ReleasedCount} unpublished message(s) claimed by worker {WorkerId} because the remaining lease is shorter than one publish budget.")]
+    private static partial void LogBatchStopped(ILogger logger, int releasedCount, string workerId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Publishing outbox message {MessageId} threw; treating as retryable.")]
     private static partial void LogPublishException(ILogger logger, Exception exception, Guid messageId);
