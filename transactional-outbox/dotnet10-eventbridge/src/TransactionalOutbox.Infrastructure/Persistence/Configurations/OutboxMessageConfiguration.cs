@@ -23,15 +23,10 @@ public sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outbox
         builder.Property(message => message.DeadLetteredOnUtc).HasColumnType("datetimeoffset");
         builder.Property(message => message.RowVersion).IsRowVersion();
 
-        builder.HasIndex(message => new
-        {
-            message.ProcessedOnUtc,
-            message.DeadLetteredOnUtc,
-            message.NextAttemptOnUtc,
-            message.LockedUntilUtc,
-            message.OccurredOnUtc,
-            message.Id
-        })
+        // Keyed in claim order (OccurredOnUtc, Id) so the claim's TOP (n) ... ORDER BY can walk the
+        // index without a sort; a sort would U-lock every eligible row and starve concurrent claimers.
+        builder.HasIndex(message => new { message.OccurredOnUtc, message.Id })
+            .IncludeProperties(message => new { message.NextAttemptOnUtc, message.LockedUntilUtc })
             .HasDatabaseName("IX_OutboxMessages_Eligibility")
             .HasFilter("[ProcessedOnUtc] IS NULL AND [DeadLetteredOnUtc] IS NULL");
     }

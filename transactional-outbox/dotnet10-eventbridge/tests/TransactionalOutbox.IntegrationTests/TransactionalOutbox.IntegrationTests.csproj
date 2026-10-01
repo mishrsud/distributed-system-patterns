@@ -8,6 +8,7 @@
     <ProjectReference Include="..\..\src\TransactionalOutbox.Web\TransactionalOutbox.Web.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="AWSSDK.SQS" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" PrivateAssets="all" />
     <PackageReference Include="xunit" PrivateAssets="all" />

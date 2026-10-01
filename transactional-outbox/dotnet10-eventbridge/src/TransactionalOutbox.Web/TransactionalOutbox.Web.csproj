@@ -5,4 +5,8 @@
     <ProjectReference Include="..\TransactionalOutbox.UseCases\TransactionalOutbox.UseCases.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
+  </ItemGroup>
+
 </Project>

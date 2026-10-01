@@ -79,6 +79,32 @@ public sealed class LeaseAndStateTransitionTests(InfrastructureFixture fixture)
     }
 
     [Fact]
+    public async Task WorkerWhoseLeaseExpiredAndWasReclaimedCannotMarkProcessed()
+    {
+        await fixture.RecreateDatabaseAsync();
+        var message = OutboxTestData.CreateDue();
+        await SeedAsync(message);
+        Assert.Single(await ClaimAsync("worker-1"));
+        await using (var expire = fixture.CreateContext())
+        {
+            await OutboxTestData.ExpireLeaseAsync(expire, message.Id);
+        }
+
+        var reclaimed = Assert.Single(await ClaimAsync("worker-2"));
+        Assert.Equal(2, reclaimed.AttemptCount);
+
+        var updated = await MarkProcessedAsync(message.Id, "worker-1", "eb-stale");
+
+        Assert.False(updated);
+        await using var context = fixture.CreateContext();
+        var stored = await OutboxTestData.LoadAsync(context, message.Id);
+        Assert.Null(stored.ProcessedOnUtc);
+        Assert.Null(stored.EventBridgeEventId);
+        Assert.Equal("worker-2", stored.LockedBy);
+        Assert.True(stored.LockedUntilUtc > DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
     public async Task ScheduleRetryAndDeadLetterReturnFalseForStaleWorker()
     {
         await fixture.RecreateDatabaseAsync();

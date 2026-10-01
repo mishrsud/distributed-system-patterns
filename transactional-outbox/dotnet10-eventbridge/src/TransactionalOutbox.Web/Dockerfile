@@ -4,7 +4,7 @@ WORKDIR /src
 # Copy build configuration and project files first so restore is cached.
 # global.json is intentionally not copied: it pins the host SDK band (10.0.1xx, latestPatch),
 # and the sdk:10.0 image ships a newer feature band that the pin would reject.
-COPY Directory.Build.props Directory.Packages.props TransactionalOutbox.slnx ./
+COPY Directory.Build.props Directory.Packages.props TransactionalOutbox.slnx .editorconfig ./
 COPY src/TransactionalOutbox.Core/TransactionalOutbox.Core.csproj src/TransactionalOutbox.Core/
 COPY src/TransactionalOutbox.UseCases/TransactionalOutbox.UseCases.csproj src/TransactionalOutbox.UseCases/
 COPY src/TransactionalOutbox.Infrastructure/TransactionalOutbox.Infrastructure.csproj src/TransactionalOutbox.Infrastructure/

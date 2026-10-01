@@ -32,10 +32,6 @@ public sealed class ConcurrentClaimTests(InfrastructureFixture fixture)
         Assert.All(results.SelectMany(r => r), m => Assert.Equal(1, m.AttemptCount));
     }
 
-    // With UPDLOCK + READPAST a TOP (n) claim that needs a sort can lock every candidate row while
-    // it scans, so a racing worker may legitimately see an empty batch and simply polls again.
-    // Each worker therefore tops itself up until it holds its share; the claimed sets must still
-    // be disjoint however the race resolves.
     private Task<List<ClaimedOutboxMessage>> ClaimOnOwnContextAsync(
         string workerId,
         Barrier barrier) =>
@@ -43,17 +39,12 @@ public sealed class ConcurrentClaimTests(InfrastructureFixture fixture)
         {
             await using var context = fixture.CreateContext();
             var store = new SqlServerOutboxStore(context);
-            var claimed = new List<ClaimedOutboxMessage>();
             barrier.SignalAndWait();
-            for (var attempt = 0; attempt < 50 && claimed.Count < BatchSize; attempt++)
-            {
-                claimed.AddRange(await store.ClaimAsync(
-                    workerId,
-                    BatchSize - claimed.Count,
-                    TimeSpan.FromMinutes(5),
-                    CancellationToken.None));
-            }
-
-            return claimed;
+            var claimed = await store.ClaimAsync(
+                workerId,
+                BatchSize,
+                TimeSpan.FromMinutes(5),
+                CancellationToken.None);
+            return claimed.ToList();
         });
 }

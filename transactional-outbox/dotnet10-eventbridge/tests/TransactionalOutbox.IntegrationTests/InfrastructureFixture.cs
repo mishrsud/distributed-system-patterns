@@ -67,7 +67,7 @@ public sealed class InfrastructureFixture : IAsyncLifetime
     {
         await using var context = CreateContext();
         await context.Database.EnsureDeletedAsync();
-        await context.Database.EnsureCreatedAsync();
+        await context.Database.MigrateAsync();
     }
 
     public AppDbContext CreateContext(params ISaveChangesInterceptor[] additionalInterceptors)

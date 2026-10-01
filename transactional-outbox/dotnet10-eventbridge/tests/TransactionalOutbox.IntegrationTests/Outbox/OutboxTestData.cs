@@ -26,4 +26,9 @@ internal static class OutboxTestData
 
     public static Task<OutboxMessage> LoadAsync(AppDbContext context, Guid id) =>
         context.OutboxMessages.AsNoTracking().SingleAsync(m => m.Id == id);
+
+    // Simulates lease expiry using the database clock, exactly as the claim query compares it.
+    public static async Task ExpireLeaseAsync(AppDbContext context, Guid id) =>
+        await context.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE dbo.OutboxMessages SET LockedUntilUtc = DATEADD(minute, -1, SYSUTCDATETIME()) WHERE Id = {id}");
 }
