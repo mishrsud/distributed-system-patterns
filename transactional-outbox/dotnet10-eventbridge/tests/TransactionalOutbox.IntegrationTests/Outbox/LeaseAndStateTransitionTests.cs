@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using TransactionalOutbox.Infrastructure.Outbox;
 
 namespace TransactionalOutbox.IntegrationTests.Outbox;
@@ -116,7 +117,7 @@ public sealed class LeaseAndStateTransitionTests(InfrastructureFixture fixture)
         var store = new SqlServerOutboxStore(context);
 
         Assert.False(await store.ScheduleRetryAsync(
-            message.Id, "worker-2", DateTimeOffset.UtcNow.AddMinutes(1), "boom", CancellationToken.None));
+            message.Id, "worker-2", TimeSpan.FromMinutes(1), "boom", CancellationToken.None));
         Assert.False(await store.DeadLetterAsync(
             message.Id, "worker-2", "boom", CancellationToken.None));
 
@@ -133,21 +134,42 @@ public sealed class LeaseAndStateTransitionTests(InfrastructureFixture fixture)
         var message = OutboxTestData.CreateDue();
         await SeedAsync(message);
         await ClaimAsync("worker-1");
-        var nextAttempt = DateTimeOffset.UtcNow.AddMinutes(3);
 
         await using var context = fixture.CreateContext();
         var store = new SqlServerOutboxStore(context);
         var updated = await store.ScheduleRetryAsync(
-            message.Id, "worker-1", nextAttempt, new string('x', 5000), CancellationToken.None);
+            message.Id, "worker-1", TimeSpan.FromMinutes(3), new string('x', 5000), CancellationToken.None);
 
         Assert.True(updated);
         var stored = await OutboxTestData.LoadAsync(context, message.Id);
         Assert.Equal(2048, stored.LastError!.Length);
-        Assert.Equal(nextAttempt, stored.NextAttemptOnUtc, TimeSpan.FromMilliseconds(1));
         Assert.Null(stored.LockedBy);
         Assert.Null(stored.LockedUntilUtc);
         Assert.Null(stored.DeadLetteredOnUtc);
         Assert.Empty(await ClaimAsync("worker-2"));
+    }
+
+    [Fact]
+    public async Task ScheduleRetrySetsNextAttemptFromTheDatabaseClock()
+    {
+        await fixture.RecreateDatabaseAsync();
+        var message = OutboxTestData.CreateDue();
+        await SeedAsync(message);
+        await ClaimAsync("worker-1");
+        var delay = TimeSpan.FromMinutes(7);
+
+        await using var context = fixture.CreateContext();
+        var store = new SqlServerOutboxStore(context);
+        Assert.True(await store.ScheduleRetryAsync(
+            message.Id, "worker-1", delay, "boom", CancellationToken.None));
+
+        // Measured entirely with SQL Server's clock, so host clock skew cannot affect the result.
+        var millisecondsAhead = await context.Database
+            .SqlQuery<int>(
+                $"SELECT DATEDIFF(millisecond, SYSUTCDATETIME(), NextAttemptOnUtc) AS Value FROM dbo.OutboxMessages WHERE Id = {message.Id}")
+            .SingleAsync();
+        var expected = (int)delay.TotalMilliseconds;
+        Assert.InRange(millisecondsAhead, expected - 5_000, expected);
     }
 
     [Fact]

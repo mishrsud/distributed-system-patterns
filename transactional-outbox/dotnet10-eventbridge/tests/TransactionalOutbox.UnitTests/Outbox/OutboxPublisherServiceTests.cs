@@ -112,7 +112,7 @@ public sealed class OutboxPublisherServiceTests
         public Task<bool> MarkProcessedAsync(Guid id, string workerId, string eventBridgeEventId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<bool> ScheduleRetryAsync(Guid id, string workerId, DateTimeOffset nextAttemptOnUtc, string errorMessage, CancellationToken cancellationToken) =>
+        public Task<bool> ScheduleRetryAsync(Guid id, string workerId, TimeSpan delay, string errorMessage, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public Task<bool> DeadLetterAsync(Guid id, string workerId, string errorMessage, CancellationToken cancellationToken) =>

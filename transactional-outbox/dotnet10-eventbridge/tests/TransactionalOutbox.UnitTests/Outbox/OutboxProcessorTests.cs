@@ -31,7 +31,6 @@ public sealed class OutboxProcessorTests
             publisher,
             new RetrySchedule(options),
             options,
-            new FixedTimeProvider(Now),
             logger ?? new FakeLogger());
     }
 
@@ -63,8 +62,7 @@ public sealed class OutboxProcessorTests
                 break;
             case ExpectedTransition.RetryScheduled:
                 Assert.StartsWith($"retry:{message.Id}:{WorkerId}:", transition);
-                Assert.Single(store.RetryTimes);
-                Assert.True(store.RetryTimes[0] > Now);
+                Assert.True(Assert.Single(store.RetryDelays) > TimeSpan.Zero);
                 Assert.Equal("summary", store.LastError);
                 break;
             case ExpectedTransition.DeadLettered:
@@ -193,11 +191,6 @@ public sealed class OutboxProcessorTests
         Assert.Contains(logger.Entries, e => e.Level == LogLevel.Warning);
     }
 
-    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => now;
-    }
-
     private sealed class FakeEventPublisher : IEventPublisher
     {
         public List<ClaimedOutboxMessage> Published { get; } = [];
@@ -220,7 +213,7 @@ public sealed class OutboxProcessorTests
 
         public List<string> Calls { get; } = [];
 
-        public List<DateTimeOffset> RetryTimes { get; } = [];
+        public List<TimeSpan> RetryDelays { get; } = [];
 
         public string? ClaimedWorkerId { get; private set; }
 
@@ -244,10 +237,10 @@ public sealed class OutboxProcessorTests
             return Task.FromResult(TransitionResult);
         }
 
-        public Task<bool> ScheduleRetryAsync(Guid id, string workerId, DateTimeOffset nextAttemptOnUtc, string errorMessage, CancellationToken cancellationToken)
+        public Task<bool> ScheduleRetryAsync(Guid id, string workerId, TimeSpan delay, string errorMessage, CancellationToken cancellationToken)
         {
-            Calls.Add($"retry:{id}:{workerId}:{nextAttemptOnUtc:O}");
-            RetryTimes.Add(nextAttemptOnUtc);
+            Calls.Add($"retry:{id}:{workerId}:{delay}");
+            RetryDelays.Add(delay);
             LastError = errorMessage;
             LastRetryError = errorMessage;
             return Task.FromResult(TransitionResult);

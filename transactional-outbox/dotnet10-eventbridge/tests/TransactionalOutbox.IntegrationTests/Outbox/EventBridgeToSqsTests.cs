@@ -154,7 +154,6 @@ public sealed class EventBridgeToSqsTests(InfrastructureFixture fixture) : IAsyn
             publisher,
             new RetrySchedule(outboxOptions),
             outboxOptions,
-            TimeProvider.System,
             NullLogger<OutboxProcessor>.Instance);
     }
 
@@ -214,7 +213,7 @@ public sealed class EventBridgeToSqsTests(InfrastructureFixture fixture) : IAsyn
             throw new ProcessDiedException();
 
         public Task<bool> ScheduleRetryAsync(
-            Guid id, string workerId, DateTimeOffset nextAttemptOnUtc, string errorMessage, CancellationToken cancellationToken) =>
+            Guid id, string workerId, TimeSpan delay, string errorMessage, CancellationToken cancellationToken) =>
             throw new ProcessDiedException();
 
         public Task<bool> DeadLetterAsync(

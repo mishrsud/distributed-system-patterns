@@ -98,15 +98,16 @@ public sealed class SqlServerOutboxStore(AppDbContext context) : IOutboxStore
     public async Task<bool> ScheduleRetryAsync(
         Guid id,
         string workerId,
-        DateTimeOffset nextAttemptOnUtc,
+        TimeSpan delay,
         string errorMessage,
         CancellationToken cancellationToken)
     {
         var storedError = Truncate(errorMessage);
+        var delayMs = (int)Math.Clamp(delay.TotalMilliseconds, 0, int.MaxValue);
         var rows = await context.Database.ExecuteSqlInterpolatedAsync(
             $"""
             UPDATE dbo.OutboxMessages
-            SET NextAttemptOnUtc = {nextAttemptOnUtc},
+            SET NextAttemptOnUtc = DATEADD(millisecond, {delayMs}, SYSUTCDATETIME()),
                 LastError = {storedError},
                 LockedBy = NULL,
                 LockedUntilUtc = NULL

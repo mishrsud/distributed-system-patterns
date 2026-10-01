@@ -6,7 +6,11 @@ public interface IOutboxStore
 
     Task<bool> MarkProcessedAsync(Guid id, string workerId, string eventBridgeEventId, CancellationToken cancellationToken);
 
-    Task<bool> ScheduleRetryAsync(Guid id, string workerId, DateTimeOffset nextAttemptOnUtc, string errorMessage, CancellationToken cancellationToken);
+    /// <summary>
+    /// Releases the lease and makes the row eligible again <paramref name="delay"/> from now, measured with the
+    /// database clock so application-host clock skew cannot shorten or lengthen the backoff.
+    /// </summary>
+    Task<bool> ScheduleRetryAsync(Guid id, string workerId, TimeSpan delay, string errorMessage, CancellationToken cancellationToken);
 
     Task<bool> DeadLetterAsync(Guid id, string workerId, string errorMessage, CancellationToken cancellationToken);
 

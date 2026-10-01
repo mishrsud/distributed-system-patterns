@@ -8,7 +8,6 @@ public sealed partial class OutboxProcessor(
     IEventPublisher publisher,
     RetrySchedule retrySchedule,
     IOptions<OutboxOptions> options,
-    TimeProvider timeProvider,
     ILogger<OutboxProcessor> logger)
 {
     private readonly OutboxOptions _options = options.Value;
@@ -69,9 +68,8 @@ public sealed partial class OutboxProcessor(
             return deadLettered;
         }
 
-        DateTimeOffset nextAttempt = timeProvider.GetUtcNow()
-            + retrySchedule.GetDelay(message.AttemptCount, Random.Shared.NextDouble());
-        return await store.ScheduleRetryAsync(message.Id, workerId, nextAttempt, result.ErrorSummary, cancellationToken);
+        TimeSpan delay = retrySchedule.GetDelay(message.AttemptCount, Random.Shared.NextDouble());
+        return await store.ScheduleRetryAsync(message.Id, workerId, delay, result.ErrorSummary, cancellationToken);
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Outbox message {MessageId} transition skipped: lease no longer owned by worker {WorkerId}.")]
