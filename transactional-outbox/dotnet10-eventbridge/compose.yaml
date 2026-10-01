@@ -1,0 +1,59 @@
+name: transactional-outbox
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2025-latest
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?copy .env.example to .env}
+    ports:
+      - "127.0.0.1:14339:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"SELECT 1\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+
+  localstack:
+    image: ${LOCALSTACK_IMAGE:-localstack/localstack:4.14.0}
+    environment:
+      SERVICES: events,sqs
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:-}
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      - ./localstack/ready.d:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "r=$$(curl -fsS http://localhost:4566/_localstack/init/ready) && echo \"$$r\" | grep -Eq '\"completed\": *true' && ! echo \"$$r\" | grep -q '\"state\": *\"ERROR\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  web:
+    profiles: [full]
+    build:
+      context: .
+      dockerfile: src/TransactionalOutbox.Web/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__SqlServer: Server=sqlserver,1433;Database=TransactionalOutbox;User Id=sa;Password=${MSSQL_SA_PASSWORD:?copy .env.example to .env};TrustServerCertificate=True
+      EventBridge__ServiceUrl: http://localstack:4566
+      EventBridge__AuthenticationRegion: ap-southeast-2
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+volumes:
+  sqlserver-data:

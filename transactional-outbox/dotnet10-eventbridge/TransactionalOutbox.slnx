@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="src/TransactionalOutbox.Core/TransactionalOutbox.Core.csproj" />
+  <Project Path="src/TransactionalOutbox.UseCases/TransactionalOutbox.UseCases.csproj" />
+  <Project Path="src/TransactionalOutbox.Infrastructure/TransactionalOutbox.Infrastructure.csproj" />
+  <Project Path="src/TransactionalOutbox.Web/TransactionalOutbox.Web.csproj" />
+  <Project Path="tests/TransactionalOutbox.UnitTests/TransactionalOutbox.UnitTests.csproj" />
+  <Project Path="tests/TransactionalOutbox.IntegrationTests/TransactionalOutbox.IntegrationTests.csproj" />
+</Solution>

@@ -1,0 +1,4 @@
+# EF Core tooling output is regenerated, not hand-edited: keep analyzers and style rules off it.
+[src/TransactionalOutbox.Infrastructure/Persistence/Migrations/*.cs]
+generated_code = true
+dotnet_analyzer_diagnostic.severity = none

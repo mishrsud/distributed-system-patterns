@@ -1,0 +1,6 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\TransactionalOutbox.Core\TransactionalOutbox.Core.csproj" />
+  </ItemGroup>
+</Project>
