@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using TransactionalOutbox.Core.Common;
 using TransactionalOutbox.Core.Orders;
