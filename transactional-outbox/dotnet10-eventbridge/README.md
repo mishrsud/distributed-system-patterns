@@ -102,9 +102,12 @@ There are two phases.
 1. **Claim (short transaction).** `SqlServerOutboxStore` runs one parameterized
    `UPDATE ... OUTPUT` over a CTE selecting eligible rows `WITH (UPDLOCK, READPAST, ROWLOCK)`. It sets a unique
    worker ID and a lease expiry (`LockedBy`, `LockedUntilUtc`) and increments `AttemptCount`. Eligible means
-   not processed, not dead-lettered, `NextAttemptOnUtc` due, and either unlocked or lease expired. All time
-   comparisons use `SYSUTCDATETIME()` so they all read one clock: the database's. **The transaction commits
-   before any network call.**
+   not processed, not dead-lettered, `NextAttemptOnUtc` due, and either unlocked or lease expired. Eligibility,
+   lease expiry and retry times are all computed with `SYSUTCDATETIME()`, so they read one clock: the
+   database's, and application-host clock skew cannot cause tight retry loops. **The transaction commits
+   before any network call.** (Two timestamps still come from the host clock: the initial `NextAttemptOnUtc`,
+   which the interceptor sets to the event's `OccurredOnUtc`, and the cleanup cutoff. Skew there only shifts
+   first-publish latency or retention slightly; it cannot cause duplicates or retry storms.)
 2. **Publish.** `EventBridgePublisher` sends one claimed message per `PutEvents` request, with
    `Source = sample.orders`, `DetailType = OrderPlaced` and the stored JSON as `Detail`.
 3. **Acknowledge.** On success the row gets `ProcessedOnUtc` and the EventBridge event ID. On failure it gets a
@@ -121,9 +124,16 @@ The claim holds row locks only for the duration of one fast `UPDATE`. If the pub
 transaction open while calling EventBridge, a slow or hung network call would pin locks, block other
 publishers, and risk transaction timeouts. Instead, the *lease* (`LockedBy` + `LockedUntilUtc`) is the
 durable claim: it marks a row as "mine until time T" without any open transaction. If a publisher dies, the
-lease simply expires and another worker takes the row. The SDK's per-request timeout and retry budget
-(`Timeout` 5 s, `MaxErrorRetry` 2, so at most 15 s) are intentionally shorter than the default 30 s lease, so a
-publish attempt cannot outlive the lease it runs under.
+lease simply expires and another worker takes the row.
+
+One claim leases a whole batch, but messages are published one at a time, so the lease has to cover more than
+one publish. The SDK's per-request timeout and retry count (`EventBridge:RequestTimeout` 5 s,
+`EventBridge:MaxErrorRetry` 2) bound one publish to roughly 15 s (`RequestTimeout x (MaxErrorRetry + 1)`, plus
+the SDK's short backoff between retries). Startup validation requires `Outbox:LeaseDuration` (default 30 s) to
+be longer than that budget, so a single publish is not expected to outlive its lease. Before each publish,
+`OutboxProcessor` checks the time since the claim: once the remaining lease is shorter than one publish budget
+it stops the batch and releases the unpublished rows (clearing the lease and undoing the attempt the claim
+counted), so a slow EventBridge cannot leave rows being published by two workers at once.
 
 `UPDLOCK` + `READPAST` is the SQL Server queue idiom: concurrent publishers skip rows another publisher is
 claiming instead of blocking on them. See the
@@ -185,7 +195,8 @@ Test-only packages (xUnit, `AWSSDK.SQS` for reading the queue) live in the test 
 
 ## Prerequisites
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download) (the repo pins it in `global.json`)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download). The sample pins it in `global.json` with a minimum of
+  10.0.102; any 10.0 feature band (10.0.1xx, 2xx, 3xx, 4xx, ...) works.
 - Docker with Compose v2
 - `curl`
 
@@ -208,6 +219,11 @@ cp .env.example .env
 
 `.env` holds `MSSQL_SA_PASSWORD`, a disposable development value that SQL Server's password policy accepts.
 The file is gitignored. Never reuse that password anywhere real.
+
+The same password is also hard-coded in two places that run on your machine rather than in Compose: the
+connection string in `src/TransactionalOutbox.Web/appsettings.Development.json` and the default connection
+string in `tests/TransactionalOutbox.IntegrationTests/InfrastructureFixture.cs`. If you change it in `.env`,
+update both (or override them with the `ConnectionStrings__SqlServer` environment variable).
 
 ### 2. Start SQL Server and LocalStack
 
@@ -464,8 +480,8 @@ which it drops and recreates; your `TransactionalOutbox` data is untouched.
 ## The delivery contract and consumer idempotency
 
 - The publisher guarantees **at-least-once** delivery to EventBridge for every committed order.
-- A message can be delivered more than once: after a crash between `PutEvents` and the success update, when a
-  lease expires during a slow publish, and, rarely, because EventBridge itself may invoke a target more than once
+- A message can be delivered more than once: after a crash between `PutEvents` and the success update, if a
+  publish is slow enough to outlast its lease despite the per-batch budget check, and, rarely, because EventBridge itself may invoke a target more than once
   ([EventBridge troubleshooting](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-troubleshooting.html)).
 - Therefore **consumers must be idempotent**. The key is `detail.eventId`: the outbox row ID, identical on every
   retry and duplicate. A typical consumer stores processed event IDs (an *inbox* table with a unique
@@ -495,6 +511,8 @@ the separator (for example `Outbox__BatchSize=5`).
 | `EventBridge:Source` / `DetailType` | `sample.orders` / `OrderPlaced` | Must match the rule's event pattern |
 | `EventBridge:ServiceUrl` | empty | Set to LocalStack locally; leave empty to use real AWS |
 | `EventBridge:AuthenticationRegion` | `ap-southeast-2` (Development) | Region used when `ServiceUrl` is set |
+| `EventBridge:RequestTimeout` | `00:00:05` | SDK per-request timeout |
+| `EventBridge:MaxErrorRetry` | `2` | SDK immediate retries per publish. `RequestTimeout x (MaxErrorRetry + 1)` must be less than `Outbox:LeaseDuration` (validated at startup). |
 
 The application has no LocalStack-specific code path. Pointing it at LocalStack is purely configuration:
 service URL, region and dummy credentials. For .NET clients LocalStack recommends `ServiceURL` plus
@@ -561,7 +579,11 @@ This is a tutorial, not a production template.
   throughput. EventBridge allows batching up to 10 entries per request.
 - **Polling, not push.** Latency is bounded below by `Outbox:IdleDelay`, and an idle system still polls SQL.
 - **No dead-letter replay or inspection tooling.** Dead-lettered rows stay in `OutboxMessages` until you handle
-  them in SQL.
+  them in SQL. `AccessDeniedException` is classified as permanent, so an IAM misconfiguration dead-letters every
+  message published while it lasts; fixing IAM does not bring them back without a replay tool (listed under
+  future extensions).
+- **IAM on real AWS.** The publisher needs `events:PutEvents` on the bus, and the startup validator also needs
+  `events:DescribeEventBus`; without it the host refuses to start.
 - **No metrics, tracing or alerting.** Only logs.
 - **LocalStack is not AWS.** Passing here does not prove parity with real EventBridge or SQS behaviour (IAM,
   quotas, throttling, retry semantics, delivery timing). Validate against real AWS before relying on this.
