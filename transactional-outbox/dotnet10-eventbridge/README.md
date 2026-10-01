@@ -165,7 +165,9 @@ the host refuses to start if the configured bus is missing. See the
 - A permanent entry error dead-letters the row immediately. A retryable failure dead-letters it once
   `AttemptCount` reaches `Outbox:MaxAttempts` (default 10). Dead-lettered rows keep their `LastError`.
 - Host shutdown cancellation propagates and is **not** recorded as a message failure. The row's lease just
-  expires and another publisher picks it up.
+  expires and another publisher picks it up. One exception: if EventBridge already accepted the event when
+  shutdown begins, the success update still runs (with its own short timeout) so the row is marked processed
+  instead of being published again.
 - Cycle-level failures (for example SQL Server being unavailable) are logged and delayed; they do not
   terminate the host.
 
